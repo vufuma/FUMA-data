@@ -1,0 +1,402 @@
+# Author: Doug Wightman
+# Date: 2023-08-01
+##### summary of updates ##################
+-Ensembl v102 and v110 added
+-Ensembl v92 removed
+-annotPlot.R changed to query local file instead of biomaRt
+-any job which used v102 or lower will use v102 data for annotPlot.R function
+-cell type module used Ensembl data from /data/ENSG/ due to coding error. The ENSG.genes.txt in this folder was updated to be the ENSG.genes.txt from /data/ENSG/v110/. The version that was being used has been renamed ENSG.genes.txt.legacy
+
+#limitations:
+-In gene2func and cell type, users are allowed to upload in ENSG, entrez, or gene symbol. Then FUMA updates those to either ENSG (cell type) or entrez (gene2func) based on the ENSG data I just made. However, many entrez ID or gene symbols exist for a single ENSG ID but only one will match the ENSG.genes.txt file. So users may lose information based on which entrez or gene symbol they upload.
+-Solution would be to put every possible ENSG to other ID combination in ENSG.genes.txt. However that was not Kyoko's original strategy so I am unsure how that would manifest in the code.
+
+#try to update the information
+#file format is
+ensembl_gene_id	external_gene_name	chromosome_name	start_position	end_position	strand	gene_biotype	hgnc_symbol	entrezID	mim	uniprotalias
+
+
+#test I have the right criteria
+library(biomaRt)
+#Set to homosapien hg19
+ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl", GRCh=37, version=92)
+genes1 <- getBM(attributes = c("ensembl_gene_id","external_gene_name","chromosome_name","start_position","end_position","strand","gene_biotype"), mart = ensembl, useCache=FALSE)
+
+#remove weird chromosome numbers
+gc<-c(seq(1:22),"X")
+genes1<-genes1[genes1$chromosome_name %in% gc,]
+
+g<-fread("ENSG.genes.txt")
+dim(g)
+g<-g[order(g$ensembl_gene_id),]
+genes1<-genes1[order(genes1$ensembl_gene_id),]
+all(g$ensembl_gene_id==genes1$ensembl_gene_id)
+all(g$external_gene_name==genes1$external_gene_name)
+all(g$chromosome_name==genes1$chromosome_name)
+all(g$start_position==genes1$start_position)
+all(g$end_position==genes1$end_position)
+all(g$strand==genes1$strand)
+all(g$gene_biotype==genes1$gene_biotype)
+#all true
+
+#in addition to those I also need "hgnc_symbol","entrezgene_id","mim_gene_accession","uniprotswissprot","external_synonym"
+
+################### make the version 102 ###############################
+#/data/ENSG/v102
+
+#format ENSG gene info
+library(biomaRt)
+library(data.table)
+ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl", GRCh=37, version=102)
+#get genes base info and then add all the other info
+genes1 <- getBM(attributes = c("ensembl_gene_id","external_gene_name","chromosome_name","start_position","end_position","strand","gene_biotype"), mart = ensembl, useCache=FALSE)
+
+
+#remove weird chromosome numbers
+gc<-c(seq(1:22),"X")
+genes1<-genes1[genes1$chromosome_name %in% gc,]
+
+#get the gene names
+#"hgnc_symbol","entrezgene_id","mim_gene_accession","uniprotswissprot","external_synonym"
+#get hgnc
+hgnc<-getBM(attributes = c("ensembl_gene_id","hgnc_symbol"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(hgnc)
+hgnc$hgnc_symbol[hgnc$hgnc_symbol==""]<-NA
+hgnc<-aggregate(hgnc$hgnc_symbol, list(hgnc$ensembl_gene_id), paste, collapse=",")
+hgnc[grep("^NA,",hgnc$x),]
+#get first gene name
+hgnc$hgnc_symbol<-gsub(",.*","",hgnc$x)
+#give hgnc name to the gene1 dataframe
+genes1<-genes1[order(genes1$ensembl_gene_id),]
+hgnc<-hgnc[order(hgnc$Group.1),]
+all(genes1$ensembl_gene_id==hgnc$Group.1)
+genes1$hgnc_symbol<-hgnc$hgnc_symbol
+
+alias<-hgnc[,1:2]
+rm(hgnc)
+
+# repeat with entrez gene id
+en<-getBM(attributes = c("ensembl_gene_id","entrezgene_id"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(en)
+en$entrezgene_id[en$entrezgene_id==""]<-NA
+en<-aggregate(en$entrezgene_id, list(en$ensembl_gene_id), paste, collapse=",")
+en[grep("^NA,",en$x),]
+#get first gene name
+en$entrezID<-gsub(",.*","",en$x)
+#give hgnc name to the gene1 dataframe
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+en<-en[order(en$Group.1),]
+all(genes1$ensembl_gene_id==en$Group.1)
+genes1$entrezID <-en$entrezID
+
+
+
+#repeat with mim
+mim<-getBM(attributes = c("ensembl_gene_id","mim_gene_accession"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(mim)
+mim$mim_gene_accession[mim$mim_gene_accession==""]<-NA
+mim<-aggregate(mim$mim_gene_accession, list(mim$ensembl_gene_id), paste, collapse=",")
+mim[grep("^NA,",mim$x),]
+#get first gene name
+mim$mim<-gsub(",.*","",mim$x)
+#give hgnc name to the gene1 dataframe
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+mim<-mim[order(mim$Group.1),]
+all(genes1$ensembl_gene_id==mim$Group.1)
+genes1$mim <-mim$mim
+
+
+#repeat with uniprot
+uni<-getBM(attributes = c("ensembl_gene_id","uniprotswissprot"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(uni)
+uni$uniprotswissprot[uni$uniprotswissprot==""]<-"ZZZZZZZZ"
+uni<-aggregate(uni$uniprotswissprot, list(uni$ensembl_gene_id), paste, collapse=",")
+length(grep(",", uni$x))
+head(uni[grep(",", uni$x),])
+uni[grep("^NA,",uni$x),]
+#get first gene name
+uni$uniprot<-gsub("^NA,","",uni$x)
+uni$uniprot<-gsub(",.*","",uni$uniprot)
+#give hgnc name to the gene1 dataframe
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+uni<-uni[order(uni$Group.1),]
+dim(uni)
+#20691, less rows than genes1 so we will have to merge
+dim(genes1[genes1$ensembl_gene_id %in% uni$Group.1,])
+#20691
+un<-uni[,c(1,3)]
+genes1<-merge(genes1,un,by.x="ensembl_gene_id", by.y="Group.1",all.x=TRUE)
+
+#add synonyms
+syn<-getBM(attributes = c("ensembl_gene_id","external_synonym"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(syn)
+hgnc<-getBM(attributes = c("ensembl_gene_id","hgnc_symbol"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(hgnc)
+#combine the gene names
+colnames(hgnc)<-c("ensembl_gene_id","external_synonym")
+g1<-genes1[,1:2]
+colnames(g1)<-c("ensembl_gene_id","external_synonym")
+syn<-rbind(syn,hgnc,g1)
+rm(hgnc)
+rm(g1)
+
+#get unique rows
+syn<-unique(syn)
+
+#merge the names based on ensemble gene id
+syn$external_synonym[syn$external_synonym==""]<-NA
+syn<-aggregate(syn$external_synonym, list(syn$ensembl_gene_id), paste, collapse="|")
+syn<-syn[order(syn$Group.1),]
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+all(genes1$ensembl_gene_id==syn$Group.1)
+genes1$alias <-syn$x
+
+#reorder genes
+genes1$chromosome_name[genes1$chromosome_name=="X"]<-23
+table(genes1$chromosome_name)
+genes1$chromosome_name<-as.numeric(genes1$chromosome_name)
+genes1$start_position<-as.numeric(genes1$start_position)
+genes1<-genes1[order(genes1$chromosome_name,genes1$start_position),]
+
+#change 23 back to X
+genes1$chromosome_name[genes1$chromosome_name=="23"]<-"X"
+table(genes1$chromosome_name)
+fwrite(genes1, file="102ENSG.genes.txt", col.names=T, row.names=F, quote=F, na=NA, sep="\t")
+########################################################################
+
+#add the "|" to the genes and remove NA
+cut -f1-11 102ENSG.genes.txt > tmp1.txt
+cut -f12 102ENSG.genes.txt | sed 's/NA|//g' | sed 's/|NA//g' | sed 's/^/|/g' | sed 's/$/|/g' | sed 's/|alias|/alias/' > tmp2.txt
+paste tmp1.txt tmp2.txt > ENSG.genes.txt
+
+
+#compare to old version
+#R
+library(data.table)
+library(biomaRt)
+new<-fread("ENSG.genes.txt")
+old<-fread("/data/ENSG/v92/ENSG.genes.txt")
+
+dim(old[!old$ensembl_gene_id %in% new$ensembl_gene_id,])
+#0
+dim(new[!new$ensembl_gene_id %in% old$ensembl_gene_id,])
+#0
+######################
+
+
+#make MAGMA files
+#ENSG CHR START END STRAND NAME
+#change strand to + and - rather than 1 and -1
+#check that there are no duplicates
+
+#/data/MAGMA/
+grep -w "protein_coding" /data/ENSG/v102/ENSG.genes.txt | tail -n +2 |  awk '{print $1,$3,$4,$5,$6,$2}' | awk '{if ($5=="-1") print $1,$2,$3,$4,"-",$6; else print $1,$2,$3,$4,"+",$6}' | sed 's/ /\t/g'  > ENSGv102.coding.genes.txt 
+
+#window files are made when users submit jobs that need them
+
+
+#### everything worked well on dfumatest. Make update to github
+#update resources/views/pages/gene2func.blade.php and resources/views/snp2gene/newjob.blade.php to only offer v102 as an option
+#update resources/views/pages/updates.blade.php
+#update resources/views/tutorial/snp2gene/parameters.blade.php
+#update app.config to reflect new version v1.5.5
+#update annotPlot.R
+
+
+
+#There are fewer Number of background genes with unique entrez ID when using v102 which affects the gene2func results
+#this is because the entrezID was selected at random when there were multiple options so we may have not picked the one which overlaps with the gene2func data.
+#This is not an issue  because the next update will be to change the gene2func pipeline to work with ENSG
+
+
+
+
+
+
+
+####################### make v110 #######################################
+#/data/ENSG/v110/
+
+#format ENSG gene info
+#R
+library(biomaRt)
+library(data.table)
+ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl", GRCh=37, version=110)
+#get genes base info and then add all the other info
+genes1 <- getBM(attributes = c("ensembl_gene_id","external_gene_name","chromosome_name","start_position","end_position","strand","gene_biotype"), mart = ensembl, useCache=FALSE)
+
+
+#remove weird chromosome numbers
+gc<-c(seq(1:22),"X")
+genes1<-genes1[genes1$chromosome_name %in% gc,]
+
+#get the gene names
+#"hgnc_symbol","entrezgene_id","mim_gene_accession","uniprotswissprot","external_synonym"
+#get hgnc
+hgnc<-getBM(attributes = c("ensembl_gene_id","hgnc_symbol"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(hgnc)
+#[1] 57317     2
+#set missing to NA
+hgnc$hgnc_symbol[hgnc$hgnc_symbol==""]<-NA
+#aggregate all the duplicates
+hgnc<-aggregate(hgnc$hgnc_symbol, list(hgnc$ensembl_gene_id), paste, collapse=",")
+#remove the NAs if the aggregate genelist starts with NA
+hgnc[hgnc$x %like% ",",][1:10,]
+hgnc[grep("^NA,",hgnc$x),]
+#none
+#get first gene name
+hgnc$hgnc_symbol<-gsub(",.*","",hgnc$x)
+#give hgnc name to the gene1 dataframe
+genes1<-genes1[order(genes1$ensembl_gene_id),]
+hgnc<-hgnc[order(hgnc$Group.1),]
+all(genes1$ensembl_gene_id==hgnc$Group.1)
+hgnc<-hgnc[,c("Group.1","hgnc_symbol")]
+genes1<-merge(genes1,hgnc,by.x="ensembl_gene_id",by.y="Group.1",all.x=T)
+rm(hgnc)
+
+# repeat with entrez gene id
+en<-getBM(attributes = c("ensembl_gene_id","entrezgene_id"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(en)
+#[1] 59908     2
+en$entrezgene_id[en$entrezgene_id==""]<-NA
+en<-aggregate(en$entrezgene_id, list(en$ensembl_gene_id), paste, collapse=",")
+en[grep("^NA,",en$x),]
+#none
+#get first gene name
+en$entrezID<-gsub(",.*","",en$x)
+#give hgnc name to the gene1 dataframe
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+en<-en[order(en$Group.1),]
+all(genes1$ensembl_gene_id==en$Group.1)
+en<-en[,c("Group.1","entrezID")]
+genes1<-merge(genes1,en,by.x="ensembl_gene_id",by.y="Group.1",all.x=T)
+rm(en)
+
+
+#repeat with mim
+mim<-getBM(attributes = c("ensembl_gene_id","mim_gene_accession"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(mim)
+#[1] 58019     2
+mim$mim_gene_accession[mim$mim_gene_accession==""]<-NA
+mim<-aggregate(mim$mim_gene_accession, list(mim$ensembl_gene_id), paste, collapse=",")
+mim[grep("^NA,",mim$x),]
+#none
+#get first gene name
+mim$mim<-gsub(",.*","",mim$x)
+#give hgnc name to the gene1 dataframe
+#genes1<-genes1[order(genes1$ensembl_gene_id),]
+mim<-mim[order(mim$Group.1),]
+all(genes1$ensembl_gene_id==mim$Group.1)
+mim<-mim[,c("Group.1","mim")]
+genes1<-merge(genes1,mim,by.x="ensembl_gene_id",by.y="Group.1",all.x=T)
+rm(mim)
+
+#repeat with uniprot
+uni<-getBM(attributes = c("ensembl_gene_id","uniprotswissprot"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(uni)
+#[1] 33956     2
+uni$uniprotswissprot[uni$uniprotswissprot==""]<-"NA"
+uni<-aggregate(uni$uniprotswissprot, list(uni$ensembl_gene_id), paste, collapse=",")
+length(grep(",", uni$x))
+#13224
+head(uni[grep(",", uni$x),])
+uni[grep("^NA,",uni$x),]
+#get first gene name
+uni$uniprot<-gsub("^NA,","",uni$x)
+uni$uniprot<-gsub(",.*","",uni$uniprot)
+#give hgnc name to the gene1 dataframe
+un<-uni[,c("Group.1","uniprot")]
+genes1<-merge(genes1,un,by.x="ensembl_gene_id", by.y="Group.1",all.x=TRUE)
+
+#add synonyms
+syn<-getBM(attributes = c("ensembl_gene_id","external_synonym"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(syn)
+#[1] 107284      2
+hgnc<-getBM(attributes = c("ensembl_gene_id","hgnc_symbol"), mart = ensembl, filter = 'ensembl_gene_id', values =genes1$ensembl_gene_id, useCache=FALSE)
+dim(hgnc)
+#combine the gene names
+colnames(hgnc)<-c("ensembl_gene_id","external_synonym")
+g1<-genes1[,1:2]
+colnames(g1)<-c("ensembl_gene_id","external_synonym")
+syn<-rbind(syn,hgnc,g1)
+rm(hgnc)
+rm(g1)
+
+#get unique rows
+syn<-unique(syn)
+
+#merge the names based on ensemble gene id
+syn$external_synonym[syn$external_synonym==""]<-NA
+syn<-aggregate(syn$external_synonym, list(syn$ensembl_gene_id), paste, collapse="|")
+syn<-syn[order(syn$Group.1),]
+colnames(syn)<-c("Group.1","alias")
+genes1<-merge(genes1,syn,by.x="ensembl_gene_id", by.y="Group.1",all.x=TRUE)
+
+#reorder genes
+genes1$chromosome_name[genes1$chromosome_name=="X"]<-23
+table(genes1$chromosome_name)
+genes1$chromosome_name<-as.numeric(genes1$chromosome_name)
+genes1$start_position<-as.numeric(genes1$start_position)
+genes1<-genes1[order(genes1$chromosome_name,genes1$start_position),]
+
+#change 23 back to X
+genes1$chromosome_name[genes1$chromosome_name=="23"]<-"X"
+table(genes1$chromosome_name)
+fwrite(genes1, file="110ENSG.genes.txt", col.names=T, row.names=F, quote=F, na=NA, sep="\t")
+########################################################################
+
+#add the "|" to the genes and remove NA
+cut -f1-11 110ENSG.genes.txt > tmp1.txt
+cut -f12 110ENSG.genes.txt | sed 's/NA|//g' | sed 's/|NA//g' | sed 's/^/|/g' | sed 's/$/|/g' | sed 's/|alias|/alias/' > tmp2.txt
+paste tmp1.txt tmp2.txt > ENSG.genes.txt
+
+
+#compare to old version
+#R
+library(data.table)
+new<-fread("ENSG.genes.txt")
+old<-fread("/data/ENSG/v92/ENSG.genes.txt")
+
+dim(old[!old$ensembl_gene_id %in% new$ensembl_gene_id,])
+#0
+dim(new[!new$ensembl_gene_id %in% old$ensembl_gene_id,])
+#0
+##################
+
+
+#make MAGMA files
+#ENSG CHR START END STRAND NAME
+#change strand to + and - rather than 1 and -1
+#check that there are no duplicates
+
+#/data/MAGMA/
+grep -w "protein_coding" /data/ENSG/v110/ENSG.genes.txt | tail -n +2 |  awk '{print $1,$3,$4,$5,$6,$2}' | awk '{if ($5=="-1") print $1,$2,$3,$4,"-",$6; else print $1,$2,$3,$4,"+",$6}' | sed 's/ /\t/g'  > ENSGv110.coding.genes.txt 
+
+
+
+
+############## edit annotPlot.R to use a local version instead of biomart ##########
+#first make a file which has the data which annotPlot.R needs
+
+#/data/ENSG/v102/
+#R
+library(biomaRt)
+library(data.table)
+ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl", GRCh=37, version="102")
+exons <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "start_position", "end_position", "strand", "gene_biotype", "exon_chrom_start", "exon_chrom_end"), mart = ensembl, useCache=FALSE)
+fwrite(exons, file="biomaRt4annotPlot.txt", col.names=T, row.names=F, quote=F, na=NA, sep="\t")
+#########################################################
+
+
+#/data/ENSG/v110/
+#R
+library(biomaRt)
+library(data.table)
+ensembl <- useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl", GRCh=37, version="110")
+exons <- getBM(attributes = c("ensembl_gene_id", "external_gene_name", "start_position", "end_position", "strand", "gene_biotype", "exon_chrom_start", "exon_chrom_end"), mart = ensembl, useCache=FALSE)
+fwrite(exons, file="biomaRt4annotPlot.txt", col.names=T, row.names=F, quote=F, na=NA, sep="\t")
+#########################################################
+
+
+#edit annotPlot.R to use this file instead of biomaRt
+#use v102 if params version is equal or less than v102
